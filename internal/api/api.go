@@ -34,6 +34,9 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/projects", a.handleProjects)
 	mux.HandleFunc("GET /api/v1/projects/monthly", a.handleProjectMonthly)
 	mux.HandleFunc("GET /api/v1/rates", a.handleRates)
+	mux.HandleFunc("GET /api/v1/models", a.handleModels)
+	mux.HandleFunc("GET /api/v1/heatmap", a.handleHeatmap)
+	mux.HandleFunc("GET /api/v1/sessions/{id}/requests", a.handleSessionRequests)
 	mux.HandleFunc("GET /api/v1/ws", a.handleWS)
 }
 
@@ -56,6 +59,12 @@ func (a *API) handleSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	trends, err := a.store.GetTrends()
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
 	resp := map[string]any{
 		"today":     summary.Today,
 		"week":      summary.Week,
@@ -68,6 +77,7 @@ func (a *API) handleSummary(w http.ResponseWriter, r *http.Request) {
 			"cache_write": cacheWrite,
 		},
 		"cost_breakdown": costBreakdown,
+		"trends":         trends,
 		"budget":         a.cfg.MonthlyBudgetUSD,
 	}
 	writeJSON(w, resp)
@@ -181,6 +191,34 @@ func (a *API) handleProjectMonthly(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) handleRates(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, calculator.Rates)
+}
+
+func (a *API) handleModels(w http.ResponseWriter, r *http.Request) {
+	models, err := a.store.GetModelBreakdown()
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	writeJSON(w, models)
+}
+
+func (a *API) handleHeatmap(w http.ResponseWriter, r *http.Request) {
+	cells, err := a.store.GetActivityHeatmap()
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	writeJSON(w, cells)
+}
+
+func (a *API) handleSessionRequests(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	requests, err := a.store.GetSessionRequests(id)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	writeJSON(w, requests)
 }
 
 func (a *API) handleWS(w http.ResponseWriter, r *http.Request) {

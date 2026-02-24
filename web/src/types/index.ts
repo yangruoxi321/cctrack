@@ -10,6 +10,12 @@ export interface CostBreakdown {
   cache_write_cost: number
 }
 
+export interface Trends {
+  prev_day_cost: number
+  prev_week_cost: number
+  prev_month_cost: number
+}
+
 export interface Summary {
   today: SpendBucket
   week: SpendBucket
@@ -22,7 +28,34 @@ export interface Summary {
     cache_write: number
   }
   cost_breakdown: CostBreakdown
+  trends: Trends
   budget: number
+}
+
+export interface ModelSummary {
+  model: string
+  family: string
+  session_count: number
+  total_cost: number
+  total_tokens: number
+}
+
+export interface HeatmapCell {
+  day: number
+  hour: number
+  cost: number
+}
+
+export interface RequestRecord {
+  request_id: string
+  session_id: string
+  timestamp: string
+  model: string
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  cost: number
 }
 
 export interface Session {

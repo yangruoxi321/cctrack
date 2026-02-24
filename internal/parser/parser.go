@@ -132,7 +132,10 @@ func (p *Parser) ParseFile(path string) ([]string, error) {
 	}
 	sessions := make(map[string]*sessionAgg)
 
-	processEvent := func(event RawEvent) {
+	// Collect request-level records for timeline feature
+	var requestRecords []store.RequestRecord
+
+	processEvent := func(event RawEvent, requestID string) {
 		sid := event.SessionID
 		if sid == "" {
 			sid = info.SessionID
@@ -162,13 +165,35 @@ func (p *Parser) ParseFile(path string) ([]string, error) {
 		agg.output += u.OutputTokens
 		agg.cacheRead += u.CacheReadInputTokens
 		agg.cacheWrite += u.CacheCreationInputTokens
+
+		// Store per-request record if we have a requestID
+		if requestID != "" {
+			usage := calculator.TokenUsage{
+				InputTokens:      u.InputTokens,
+				OutputTokens:     u.OutputTokens,
+				CacheReadTokens:  u.CacheReadInputTokens,
+				CacheWriteTokens: u.CacheCreationInputTokens,
+			}
+			cost := calculator.Calculate(event.Message.Model, usage)
+			requestRecords = append(requestRecords, store.RequestRecord{
+				RequestID:        requestID,
+				SessionID:        sid,
+				Timestamp:        event.Timestamp,
+				Model:            event.Message.Model,
+				InputTokens:      u.InputTokens,
+				OutputTokens:     u.OutputTokens,
+				CacheReadTokens:  u.CacheReadInputTokens,
+				CacheWriteTokens: u.CacheCreationInputTokens,
+				Cost:             cost.TotalCost,
+			})
+		}
 	}
 
-	for _, entry := range byRequestID {
-		processEvent(entry.event)
+	for reqID, entry := range byRequestID {
+		processEvent(entry.event, reqID)
 	}
 	for _, event := range noRequestID {
-		processEvent(event)
+		processEvent(event, "")
 	}
 
 	// Upsert each session
@@ -201,6 +226,13 @@ func (p *Parser) ParseFile(path string) ([]string, error) {
 			continue
 		}
 		affectedIDs = append(affectedIDs, sid)
+	}
+
+	// Upsert per-request records for timeline feature
+	for _, rec := range requestRecords {
+		if err := p.store.UpsertRequest(rec); err != nil {
+			log.Printf("Warning: failed to upsert request %s: %v", rec.RequestID, err)
+		}
 	}
 
 	// Update file offset to current position

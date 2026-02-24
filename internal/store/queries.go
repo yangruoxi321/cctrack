@@ -269,3 +269,116 @@ func (s *Store) GetCostBreakdown() (*CostByType, error) {
 	}
 	return result, nil
 }
+
+// --- Feature: Model Usage Breakdown ---
+
+type ModelSummary struct {
+	Model        string  `json:"model"`
+	Family       string  `json:"family"`
+	SessionCount int     `json:"session_count"`
+	TotalCost    float64 `json:"total_cost"`
+	TotalTokens  int64   `json:"total_tokens"`
+}
+
+func (s *Store) GetModelBreakdown() ([]ModelSummary, error) {
+	rows, err := s.db.Query(`
+		SELECT model,
+			COUNT(*) as session_count,
+			SUM(total_cost) as total_cost,
+			SUM(total_input + total_output + total_cache_read + total_cache_write) as total_tokens
+		FROM sessions
+		WHERE model != ''
+		GROUP BY model
+		ORDER BY total_cost DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []ModelSummary
+	for rows.Next() {
+		var m ModelSummary
+		if err := rows.Scan(&m.Model, &m.SessionCount, &m.TotalCost, &m.TotalTokens); err != nil {
+			return nil, err
+		}
+		rates := calculator.GetRates(m.Model)
+		m.Family = rates.Family
+		results = append(results, m)
+	}
+	return results, nil
+}
+
+// --- Feature: Activity Heatmap ---
+
+type HeatmapCell struct {
+	Day  int     `json:"day"`  // 0=Sunday .. 6=Saturday
+	Hour int     `json:"hour"` // 0..23
+	Cost float64 `json:"cost"`
+}
+
+func (s *Store) GetActivityHeatmap() ([]HeatmapCell, error) {
+	rows, err := s.db.Query(`
+		SELECT CAST(STRFTIME('%w', last_activity) AS INTEGER) as dow,
+			CAST(STRFTIME('%H', last_activity, 'localtime') AS INTEGER) as hour,
+			SUM(total_cost) as cost
+		FROM sessions
+		WHERE last_activity != ''
+		GROUP BY dow, hour
+		ORDER BY dow, hour`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var cells []HeatmapCell
+	for rows.Next() {
+		var c HeatmapCell
+		if err := rows.Scan(&c.Day, &c.Hour, &c.Cost); err != nil {
+			return nil, err
+		}
+		cells = append(cells, c)
+	}
+	return cells, nil
+}
+
+// --- Feature: Cost Velocity / Trend Comparison ---
+
+type Trends struct {
+	PrevDayCost  float64 `json:"prev_day_cost"`
+	PrevWeekCost float64 `json:"prev_week_cost"`
+	PrevMonthCost float64 `json:"prev_month_cost"`
+}
+
+func (s *Store) GetTrends() (*Trends, error) {
+	now := time.Now()
+	todayStr := now.Format("2006-01-02")
+	yesterday := now.AddDate(0, 0, -1).Format("2006-01-02")
+
+	twoWeeksAgo := now.AddDate(0, 0, -14).Format("2006-01-02")
+	oneWeekAgo := now.AddDate(0, 0, -7).Format("2006-01-02")
+
+	prevMonthStart := time.Date(now.Year(), now.Month()-1, 1, 0, 0, 0, 0, now.Location()).Format("2006-01-02")
+	prevMonthEnd := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).Format("2006-01-02")
+
+	t := &Trends{}
+
+	// Previous day cost (yesterday)
+	s.db.QueryRow(`
+		SELECT COALESCE(SUM(total_cost), 0)
+		FROM sessions WHERE DATE(last_activity) >= ? AND DATE(last_activity) < ?`,
+		yesterday, todayStr).Scan(&t.PrevDayCost)
+
+	// Previous week cost (7-14 days ago)
+	s.db.QueryRow(`
+		SELECT COALESCE(SUM(total_cost), 0)
+		FROM sessions WHERE last_activity >= ? AND last_activity < ?`,
+		twoWeeksAgo, oneWeekAgo).Scan(&t.PrevWeekCost)
+
+	// Previous month cost
+	s.db.QueryRow(`
+		SELECT COALESCE(SUM(total_cost), 0)
+		FROM sessions WHERE last_activity >= ? AND last_activity < ?`,
+		prevMonthStart, prevMonthEnd).Scan(&t.PrevMonthCost)
+
+	return t, nil
+}

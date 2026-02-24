@@ -1,4 +1,4 @@
-import type { Summary, SessionsResponse, Session, DailySpend, Settings, ModelRate, ProjectSummary, ProjectMonthly } from './types'
+import type { Summary, SessionsResponse, Session, DailySpend, Settings, ModelRate, ProjectSummary, ProjectMonthly, ModelSummary, HeatmapCell, RequestRecord } from './types'
 
 const BASE = '/api/v1'
 
@@ -57,4 +57,16 @@ export async function fetchProjectMonthly(): Promise<ProjectMonthly[]> {
 
 export async function fetchRates(): Promise<ModelRate[]> {
   return get<ModelRate[]>('/rates')
+}
+
+export async function fetchModels(): Promise<ModelSummary[]> {
+  return get<ModelSummary[]>('/models')
+}
+
+export async function fetchHeatmap(): Promise<HeatmapCell[]> {
+  return get<HeatmapCell[]>('/heatmap')
+}
+
+export async function fetchSessionRequests(sessionId: string): Promise<RequestRecord[]> {
+  return get<RequestRecord[]>(`/sessions/${sessionId}/requests`)
 }

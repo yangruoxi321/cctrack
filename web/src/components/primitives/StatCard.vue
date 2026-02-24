@@ -6,6 +6,10 @@
       <span v-if="tokens !== undefined">{{ formatTokens(tokens) }} tokens</span>
       <span v-else-if="subtext" style="color: var(--text-tertiary)">{{ subtext }}</span>
     </div>
+    <div v-if="trendPct !== undefined && trendPct !== null" class="stat-trend" :class="trendClass">
+      <span class="trend-arrow">{{ trendPct > 0 ? '↑' : trendPct < 0 ? '↓' : '→' }}</span>
+      <span>{{ Math.abs(trendPct) }}% vs {{ trendLabel }}</span>
+    </div>
     <div v-if="highlight && budget > 0" class="budget-bar-wrap">
       <div class="budget-bar-fill" :style="{ width: budgetPct + '%', background: budgetColor }"></div>
     </div>
@@ -24,6 +28,8 @@ const props = defineProps<{
   highlight?: boolean
   budget?: number
   subtext?: string
+  trendPct?: number | null
+  trendLabel?: string
 }>()
 
 const targetValue = toRef(props, 'value')
@@ -33,6 +39,13 @@ const formattedValue = computed(() => {
   const v = animated.value
   if (v < 0.01) return '$' + v.toFixed(4)
   return '$' + v.toFixed(2)
+})
+
+const trendClass = computed(() => {
+  if (props.trendPct === undefined || props.trendPct === null) return ''
+  if (props.trendPct > 10) return 'trend-up'
+  if (props.trendPct < -10) return 'trend-down'
+  return 'trend-flat'
 })
 
 const budgetPct = computed(() => {
@@ -100,6 +113,18 @@ const budgetColor = computed(() => {
 }
 .stat-sub span {
   color: var(--text-secondary);
+}
+.stat-trend {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10.5px;
+  margin-top: var(--space-2);
+  color: var(--text-tertiary);
+}
+.stat-trend.trend-up { color: var(--cost-high); }
+.stat-trend.trend-down { color: #4ade80; }
+.stat-trend.trend-flat { color: var(--text-tertiary); }
+.trend-arrow {
+  margin-right: 3px;
 }
 .budget-bar-wrap {
   margin-top: var(--space-4);

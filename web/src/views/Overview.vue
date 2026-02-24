@@ -12,16 +12,22 @@
         :tokens="store.summary.today.tokens"
         :highlight="true"
         :budget="store.summary.budget"
+        :trendPct="dayTrend"
+        trendLabel="yesterday"
       />
       <StatCard
         label="This Week"
         :value="store.summary.week.cost"
         :tokens="store.summary.week.tokens"
+        :trendPct="weekTrend"
+        trendLabel="prev week"
       />
       <StatCard
         label="This Month"
         :value="store.summary.month.cost"
         :tokens="store.summary.month.tokens"
+        :trendPct="monthTrend"
+        trendLabel="prev month"
       />
       <StatCard
         label="Projected"
@@ -39,6 +45,12 @@
         :cacheReadCost="store.summary.cost_breakdown.cache_read_cost"
         :cacheWriteCost="store.summary.cost_breakdown.cache_write_cost"
       />
+    </div>
+
+    <!-- Model Breakdown + Heatmap row -->
+    <div class="insights-row" v-if="models.length || heatmap.length">
+      <ModelBreakdown :models="models" />
+      <ActivityHeatmap :cells="heatmap" />
     </div>
 
     <div class="section-header" v-if="store.recentSessions.length">
@@ -110,14 +122,18 @@ import { useDashboardStore } from '../stores/dashboard'
 import StatCard from '../components/primitives/StatCard.vue'
 import DailySpendChart from '../components/charts/DailySpendChart.vue'
 import TokenDonut from '../components/charts/TokenDonut.vue'
+import ModelBreakdown from '../components/charts/ModelBreakdown.vue'
+import ActivityHeatmap from '../components/charts/ActivityHeatmap.vue'
 import SessionRow from '../components/domain/SessionRow.vue'
 import SessionDetail from '../components/domain/SessionDetail.vue'
 import SlideOver from '../components/primitives/SlideOver.vue'
-import type { Session } from '../types'
-import { fetchSession } from '../api'
+import type { Session, ModelSummary, HeatmapCell } from '../types'
+import { fetchSession, fetchModels, fetchHeatmap } from '../api'
 
 const store = useDashboardStore()
 const selectedSession = ref<Session | null>(null)
+const models = ref<ModelSummary[]>([])
+const heatmap = ref<HeatmapCell[]>([])
 
 const currentDate = computed(() => {
   const d = new Date()
@@ -126,12 +142,35 @@ const currentDate = computed(() => {
   })
 })
 
+function trendPct(current: number, previous: number): number | null {
+  if (previous <= 0) return null
+  return Math.round(((current - previous) / previous) * 100)
+}
+
+const dayTrend = computed(() => {
+  if (!store.summary?.trends) return null
+  return trendPct(store.summary.today.cost, store.summary.trends.prev_day_cost)
+})
+
+const weekTrend = computed(() => {
+  if (!store.summary?.trends) return null
+  return trendPct(store.summary.week.cost, store.summary.trends.prev_week_cost)
+})
+
+const monthTrend = computed(() => {
+  if (!store.summary?.trends) return null
+  return trendPct(store.summary.month.cost, store.summary.trends.prev_month_cost)
+})
+
 async function openSession(id: string) {
   selectedSession.value = await fetchSession(id)
 }
 
-onMounted(() => {
+onMounted(async () => {
   if (!store.loaded) store.load()
+  const [m, h] = await Promise.all([fetchModels(), fetchHeatmap()])
+  models.value = m || []
+  heatmap.value = h || []
 })
 </script>
 
@@ -167,6 +206,13 @@ onMounted(() => {
 .charts-row {
   display: grid;
   grid-template-columns: 1fr 300px;
+  gap: var(--space-5);
+  margin-bottom: var(--space-8);
+}
+
+.insights-row {
+  display: grid;
+  grid-template-columns: 340px 1fr;
   gap: var(--space-5);
   margin-bottom: var(--space-8);
 }

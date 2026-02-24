@@ -57,9 +57,23 @@ func (s *Store) migrate() error {
 			updated_at TEXT NOT NULL DEFAULT ''
 		);
 
+		CREATE TABLE IF NOT EXISTS requests (
+			request_id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL,
+			timestamp  TEXT NOT NULL DEFAULT '',
+			model      TEXT NOT NULL DEFAULT '',
+			input_tokens      INTEGER NOT NULL DEFAULT 0,
+			output_tokens     INTEGER NOT NULL DEFAULT 0,
+			cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+			cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+			cost       REAL NOT NULL DEFAULT 0,
+			FOREIGN KEY (session_id) REFERENCES sessions(id)
+		);
+
 		CREATE INDEX IF NOT EXISTS idx_sessions_last_activity ON sessions(last_activity);
 		CREATE INDEX IF NOT EXISTS idx_sessions_total_cost ON sessions(total_cost);
 		CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions(started_at);
+		CREATE INDEX IF NOT EXISTS idx_requests_session_id ON requests(session_id);
 	`)
 	return err
 }

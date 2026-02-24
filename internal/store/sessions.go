@@ -69,6 +69,62 @@ func (s *Store) GetSession(id string) (*Session, error) {
 	return sess, nil
 }
 
+// --- Request-level tracking ---
+
+type RequestRecord struct {
+	RequestID       string  `json:"request_id"`
+	SessionID       string  `json:"session_id"`
+	Timestamp       string  `json:"timestamp"`
+	Model           string  `json:"model"`
+	InputTokens     int64   `json:"input_tokens"`
+	OutputTokens    int64   `json:"output_tokens"`
+	CacheReadTokens int64   `json:"cache_read_tokens"`
+	CacheWriteTokens int64  `json:"cache_write_tokens"`
+	Cost            float64 `json:"cost"`
+}
+
+func (s *Store) UpsertRequest(r RequestRecord) error {
+	_, err := s.db.Exec(`
+		INSERT INTO requests (request_id, session_id, timestamp, model,
+			input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(request_id) DO UPDATE SET
+			timestamp = excluded.timestamp,
+			model = excluded.model,
+			input_tokens = excluded.input_tokens,
+			output_tokens = excluded.output_tokens,
+			cache_read_tokens = excluded.cache_read_tokens,
+			cache_write_tokens = excluded.cache_write_tokens,
+			cost = excluded.cost
+	`, r.RequestID, r.SessionID, r.Timestamp, r.Model,
+		r.InputTokens, r.OutputTokens, r.CacheReadTokens, r.CacheWriteTokens, r.Cost)
+	return err
+}
+
+func (s *Store) GetSessionRequests(sessionID string) ([]RequestRecord, error) {
+	rows, err := s.db.Query(`
+		SELECT request_id, session_id, timestamp, model,
+			input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost
+		FROM requests WHERE session_id = ?
+		ORDER BY timestamp ASC`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var recs []RequestRecord
+	for rows.Next() {
+		var r RequestRecord
+		if err := rows.Scan(&r.RequestID, &r.SessionID, &r.Timestamp, &r.Model,
+			&r.InputTokens, &r.OutputTokens, &r.CacheReadTokens, &r.CacheWriteTokens,
+			&r.Cost); err != nil {
+			return nil, err
+		}
+		recs = append(recs, r)
+	}
+	return recs, nil
+}
+
 var allowedSortColumns = map[string]string{
 	"cost":       "total_cost",
 	"date":       "last_activity",
