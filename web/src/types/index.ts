@@ -21,6 +21,8 @@ export interface Summary {
   week: SpendBucket
   month: SpendBucket
   projected: number
+  all_time: SpendBucket
+  billing_cycle: SpendBucket
   tokens: {
     input: number
     output: number
@@ -90,6 +92,7 @@ export interface Settings {
   port: number
   monthly_budget_usd: number
   open_browser_on_serve: boolean
+  billing_cycle_day: number
 }
 
 export interface ModelRate {

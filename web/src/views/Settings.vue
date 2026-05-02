@@ -26,6 +26,17 @@
             <input type="number" v-model.number="store.draft.monthly_budget_usd" min="0" step="1" />
           </div>
         </div>
+        <div class="field">
+          <label>Billing Cycle Day</label>
+          <input
+            type="number"
+            v-model.number="store.draft.billing_cycle_day"
+            min="1"
+            max="31"
+            step="1"
+          />
+          <div class="hint">Day of the month your subscription renews (1–31)</div>
+        </div>
       </section>
 
       <section class="settings-section">
@@ -156,6 +167,11 @@ onMounted(() => {
   font-size: 12px;
   color: var(--text-tertiary);
   padding: var(--space-2) 0;
+}
+.hint {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-top: var(--space-1);
 }
 
 .about-grid {

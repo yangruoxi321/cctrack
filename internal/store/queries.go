@@ -7,10 +7,39 @@ import (
 )
 
 type Summary struct {
-	Today     SpendBucket `json:"today"`
-	Week      SpendBucket `json:"week"`
-	Month     SpendBucket `json:"month"`
-	Projected float64     `json:"projected"`
+	Today        SpendBucket `json:"today"`
+	Week         SpendBucket `json:"week"`
+	Month        SpendBucket `json:"month"`
+	Projected    float64     `json:"projected"`
+	AllTime      SpendBucket `json:"all_time"`
+	BillingCycle SpendBucket `json:"billing_cycle"`
+}
+
+// computeCycleStart returns the start time of the current billing cycle for a
+// given renewal day (1-31). If today's day-of-month is before the renewal day,
+// the cycle started in the previous month. Day 31 in a month with fewer days
+// clamps to that month's last day.
+func computeCycleStart(now time.Time, day int) time.Time {
+	if day < 1 {
+		day = 1
+	}
+	if day > 31 {
+		day = 31
+	}
+	year, month := now.Year(), now.Month()
+	if now.Day() < day {
+		month -= 1
+		if month < 1 {
+			month = 12
+			year -= 1
+		}
+	}
+	lastDay := time.Date(year, month+1, 0, 0, 0, 0, 0, now.Location()).Day()
+	actualDay := day
+	if actualDay > lastDay {
+		actualDay = lastDay
+	}
+	return time.Date(year, month, actualDay, 0, 0, 0, 0, now.Location())
 }
 
 type SpendBucket struct {
@@ -23,11 +52,12 @@ type DailySpend struct {
 	Cost float64 `json:"cost"`
 }
 
-func (s *Store) GetSummary() (*Summary, error) {
+func (s *Store) GetSummary(billingCycleDay int) (*Summary, error) {
 	now := time.Now()
 	todayStr := now.Format("2006-01-02")
 	weekAgo := now.AddDate(0, 0, -7).Format("2006-01-02")
 	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).Format("2006-01-02")
+	cycleStart := computeCycleStart(now, billingCycleDay).Format("2006-01-02")
 
 	summary := &Summary{}
 
@@ -54,6 +84,24 @@ func (s *Store) GetSummary() (*Summary, error) {
 		SELECT COALESCE(SUM(total_cost), 0),
 		       COALESCE(SUM(total_input + total_output + total_cache_read + total_cache_write), 0)
 		FROM sessions WHERE last_activity >= ?`, monthStart).Scan(&summary.Month.Cost, &summary.Month.Tokens)
+	if err != nil {
+		return nil, err
+	}
+
+	// All time
+	err = s.db.QueryRow(`
+		SELECT COALESCE(SUM(total_cost), 0),
+		       COALESCE(SUM(total_input + total_output + total_cache_read + total_cache_write), 0)
+		FROM sessions`).Scan(&summary.AllTime.Cost, &summary.AllTime.Tokens)
+	if err != nil {
+		return nil, err
+	}
+
+	// Current billing cycle
+	err = s.db.QueryRow(`
+		SELECT COALESCE(SUM(total_cost), 0),
+		       COALESCE(SUM(total_input + total_output + total_cache_read + total_cache_write), 0)
+		FROM sessions WHERE last_activity >= ?`, cycleStart).Scan(&summary.BillingCycle.Cost, &summary.BillingCycle.Tokens)
 	if err != nil {
 		return nil, err
 	}

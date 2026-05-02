@@ -34,6 +34,18 @@
         :value="store.summary.projected"
         subtext="est. this month"
       />
+      <StatCard
+        v-if="store.summary.all_time"
+        label="All Time"
+        :value="store.summary.all_time.cost"
+        :tokens="store.summary.all_time.tokens"
+      />
+      <StatCard
+        v-if="store.summary.billing_cycle"
+        label="This Cycle"
+        :value="store.summary.billing_cycle.cost"
+        :tokens="store.summary.billing_cycle.tokens"
+      />
     </div>
 
     <div class="charts-row" v-if="store.summary">
@@ -198,7 +210,7 @@ onMounted(async () => {
 
 .stat-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: var(--space-4);
   margin-bottom: var(--space-8);
 }

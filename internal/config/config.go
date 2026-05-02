@@ -12,6 +12,7 @@ type Config struct {
 	Port               int     `json:"port"`
 	MonthlyBudgetUSD   float64 `json:"monthly_budget_usd"`
 	OpenBrowserOnServe bool    `json:"open_browser_on_serve"`
+	BillingCycleDay    int     `json:"billing_cycle_day"`
 }
 
 func DefaultConfig() *Config {
@@ -22,6 +23,7 @@ func DefaultConfig() *Config {
 		Port:               7432,
 		MonthlyBudgetUSD:   0,
 		OpenBrowserOnServe: true,
+		BillingCycleDay:    1,
 	}
 }
 

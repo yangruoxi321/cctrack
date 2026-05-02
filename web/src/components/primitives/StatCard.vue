@@ -73,6 +73,8 @@ const budgetColor = computed(() => {
 .stat-card:nth-child(2) { animation-delay: 100ms; }
 .stat-card:nth-child(3) { animation-delay: 160ms; }
 .stat-card:nth-child(4) { animation-delay: 220ms; }
+.stat-card:nth-child(5) { animation-delay: 280ms; }
+.stat-card:nth-child(6) { animation-delay: 340ms; }
 
 .stat-card.highlight::before {
   content: '';

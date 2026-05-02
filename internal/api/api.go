@@ -41,7 +41,7 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 }
 
 func (a *API) handleSummary(w http.ResponseWriter, r *http.Request) {
-	summary, err := a.store.GetSummary()
+	summary, err := a.store.GetSummary(a.cfg.BillingCycleDay)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
@@ -66,10 +66,12 @@ func (a *API) handleSummary(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := map[string]any{
-		"today":     summary.Today,
-		"week":      summary.Week,
-		"month":     summary.Month,
-		"projected": summary.Projected,
+		"today":         summary.Today,
+		"week":          summary.Week,
+		"month":         summary.Month,
+		"projected":     summary.Projected,
+		"all_time":      summary.AllTime,
+		"billing_cycle": summary.BillingCycle,
 		"tokens": map[string]int64{
 			"input":       input,
 			"output":      output,
@@ -148,6 +150,7 @@ func (a *API) handlePostSettings(w http.ResponseWriter, r *http.Request) {
 		MonthlyBudgetUSD   *float64 `json:"monthly_budget_usd"`
 		OpenBrowserOnServe *bool    `json:"open_browser_on_serve"`
 		LogDir             *string  `json:"log_dir"`
+		BillingCycleDay    *int     `json:"billing_cycle_day"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
 		http.Error(w, "invalid JSON", 400)
@@ -162,6 +165,16 @@ func (a *API) handlePostSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if updates.LogDir != nil {
 		a.cfg.LogDir = *updates.LogDir
+	}
+	if updates.BillingCycleDay != nil {
+		d := *updates.BillingCycleDay
+		if d < 1 {
+			d = 1
+		}
+		if d > 31 {
+			d = 31
+		}
+		a.cfg.BillingCycleDay = d
 	}
 
 	if err := a.cfg.Save(); err != nil {
@@ -231,7 +244,7 @@ func (a *API) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Send initial summary snapshot
-	summary, err := a.store.GetSummary()
+	summary, err := a.store.GetSummary(a.cfg.BillingCycleDay)
 	if err == nil {
 		payload, _ := json.Marshal(summary)
 		event := hub.Event{Type: "summary.updated", Payload: payload}
