@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"sync"
 
 	"github.com/coder/websocket"
 	"github.com/ksred/cctrack/internal/calculator"
@@ -13,9 +14,19 @@ import (
 	"github.com/ksred/cctrack/internal/store"
 )
 
+// API serves the dashboard HTTP/WebSocket endpoints.
+//
+// We protect cfg with an RWMutex (Option A): handlers that read cfg take a
+// read lock and handlePostSettings takes a write lock. This is simpler than
+// switching to atomic.Pointer[config.Config] and fits the low-write,
+// moderate-read pattern of this server. NOTE: cmd/serve.go's watcher callback
+// still reads cfg.BillingCycleDay without this lock — fixing that requires
+// either threading the API instance into the callback or adding accessor
+// methods on *config.Config; out of scope for this change.
 type API struct {
 	store *store.Store
 	hub   *hub.Hub
+	mu    sync.RWMutex
 	cfg   *config.Config
 }
 
@@ -41,7 +52,12 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 }
 
 func (a *API) handleSummary(w http.ResponseWriter, r *http.Request) {
-	summary, err := a.store.GetSummary(a.cfg.BillingCycleDay)
+	a.mu.RLock()
+	billingCycleDay := a.cfg.BillingCycleDay
+	budget := a.cfg.MonthlyBudgetUSD
+	a.mu.RUnlock()
+
+	summary, err := a.store.GetSummary(billingCycleDay)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
@@ -80,7 +96,7 @@ func (a *API) handleSummary(w http.ResponseWriter, r *http.Request) {
 		},
 		"cost_breakdown": costBreakdown,
 		"trends":         trends,
-		"budget":         a.cfg.MonthlyBudgetUSD,
+		"budget":         budget,
 	}
 	writeJSON(w, resp)
 }
@@ -142,7 +158,11 @@ func (a *API) handleDaily(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleGetSettings(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, a.cfg)
+	a.mu.RLock()
+	// Copy the value so we release the lock before writing the response.
+	cfgCopy := *a.cfg
+	a.mu.RUnlock()
+	writeJSON(w, &cfgCopy)
 }
 
 func (a *API) handlePostSettings(w http.ResponseWriter, r *http.Request) {
@@ -157,6 +177,7 @@ func (a *API) handlePostSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	a.mu.Lock()
 	if updates.MonthlyBudgetUSD != nil {
 		a.cfg.MonthlyBudgetUSD = *updates.MonthlyBudgetUSD
 	}
@@ -178,10 +199,13 @@ func (a *API) handlePostSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := a.cfg.Save(); err != nil {
+		a.mu.Unlock()
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	writeJSON(w, a.cfg)
+	cfgCopy := *a.cfg
+	a.mu.Unlock()
+	writeJSON(w, &cfgCopy)
 }
 
 func (a *API) handleProjects(w http.ResponseWriter, r *http.Request) {
@@ -235,8 +259,11 @@ func (a *API) handleSessionRequests(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleWS(w http.ResponseWriter, r *http.Request) {
+	// Restrict WebSocket Origin to localhost. This prevents a malicious page
+	// the user might visit from JS-connecting to ws://localhost:<port>/api/v1/ws
+	// and exfiltrating spend data (CSRF / DNS rebinding mitigation).
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		InsecureSkipVerify: true, // local-only server
+		OriginPatterns: []string{"localhost:*", "127.0.0.1:*"},
 	})
 	if err != nil {
 		log.Printf("WebSocket accept error: %v", err)
@@ -244,7 +271,10 @@ func (a *API) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Send initial summary snapshot
-	summary, err := a.store.GetSummary(a.cfg.BillingCycleDay)
+	a.mu.RLock()
+	billingCycleDay := a.cfg.BillingCycleDay
+	a.mu.RUnlock()
+	summary, err := a.store.GetSummary(billingCycleDay)
 	if err == nil {
 		payload, _ := json.Marshal(summary)
 		event := hub.Event{Type: "summary.updated", Payload: payload}

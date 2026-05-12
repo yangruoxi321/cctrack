@@ -70,10 +70,47 @@ func (s *Store) migrate() error {
 			FOREIGN KEY (session_id) REFERENCES sessions(id)
 		);
 
+		CREATE TABLE IF NOT EXISTS file_session_contributions (
+			file_path   TEXT NOT NULL,
+			session_id  TEXT NOT NULL,
+			input       INTEGER NOT NULL DEFAULT 0,
+			output      INTEGER NOT NULL DEFAULT 0,
+			cache_read  INTEGER NOT NULL DEFAULT 0,
+			cache_write INTEGER NOT NULL DEFAULT 0,
+			cost        REAL NOT NULL DEFAULT 0,
+			PRIMARY KEY (file_path, session_id)
+		);
+
 		CREATE INDEX IF NOT EXISTS idx_sessions_last_activity ON sessions(last_activity);
 		CREATE INDEX IF NOT EXISTS idx_sessions_total_cost ON sessions(total_cost);
 		CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions(started_at);
 		CREATE INDEX IF NOT EXISTS idx_requests_session_id ON requests(session_id);
+		CREATE INDEX IF NOT EXISTS idx_file_contrib_file ON file_session_contributions(file_path);
 	`)
 	return err
+}
+
+// WithTx runs fn inside a single transaction. The transaction commits on
+// success, and rolls back if fn returns an error or panics.
+func (s *Store) WithTx(fn func(*sql.Tx) error) (err error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() {
+		if p := recover(); p != nil {
+			_ = tx.Rollback()
+			panic(p)
+		}
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	if err = fn(tx); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit tx: %w", err)
+	}
+	return nil
 }

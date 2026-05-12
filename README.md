@@ -40,7 +40,7 @@ go install github.com/ksred/cctrack@latest
 cctrack serve
 ```
 
-Opens a web dashboard on `http://localhost:8877` with real-time cost tracking. Parses logs on startup and watches for new activity.
+Opens a web dashboard on `http://localhost:7432` with real-time cost tracking. Parses logs on startup and watches for new activity.
 
 ### Parse logs manually
 
@@ -69,21 +69,22 @@ cctrack config
 1. Claude Code writes JSONL logs to `~/.claude/projects/<project>/<session>.jsonl`
 2. cctrack scans these files, extracts token usage from `assistant` messages, and deduplicates by `requestId`
 3. Costs are calculated using Anthropic's published per-token rates for each model
-4. Data is stored in a local SQLite database (`~/.config/cctrack/cctrack.db`)
+4. Data is stored in a local SQLite database (`~/.cctrack/cctrack.db`)
 5. The `serve` command starts an HTTP server with a REST API and embedded Vue SPA
 6. A file watcher detects new log activity and pushes updates via WebSocket
 
 ## Configuration
 
-Config is stored at `~/.config/cctrack/config.json`:
+Config is stored at `~/.cctrack/config.json`:
 
 ```json
 {
   "log_dir": "~/.claude/projects",
-  "db_path": "~/.config/cctrack/cctrack.db",
-  "port": 8877,
+  "db_path": "~/.cctrack/cctrack.db",
+  "port": 7432,
   "monthly_budget_usd": 200,
-  "open_browser_on_serve": true
+  "open_browser_on_serve": true,
+  "billing_cycle_day": 1
 }
 ```
 

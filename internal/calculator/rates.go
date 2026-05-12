@@ -1,5 +1,7 @@
 package calculator
 
+import "strings"
+
 type ModelRates struct {
 	Family              string
 	InputPerMToken      float64
@@ -101,7 +103,7 @@ var Rates = []ModelRates{
 
 func GetRates(model string) *ModelRates {
 	for i := range Rates {
-		if len(model) >= len(Rates[i].Family) && model[:len(Rates[i].Family)] == Rates[i].Family {
+		if strings.HasPrefix(model, Rates[i].Family) {
 			return &Rates[i]
 		}
 	}

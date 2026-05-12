@@ -101,8 +101,21 @@ var serveCmd = &cobra.Command{
 		apiHandler.RegisterRoutes(mux)
 		mux.Handle("/", api.SPAHandler(webFS))
 
-		addr := fmt.Sprintf(":%d", cfg.Port)
-		srv := &http.Server{Addr: addr, Handler: mux}
+		// Bind to loopback only — cctrack exposes spend data and is intended
+		// for local use; binding to all interfaces would expose it to the LAN.
+		addr := fmt.Sprintf("127.0.0.1:%d", cfg.Port)
+		// Timeouts: we deliberately do NOT set WriteTimeout because the
+		// /api/v1/ws endpoint is a long-lived hijacked WebSocket connection
+		// (coder/websocket) and a WriteTimeout would tear it down mid-stream.
+		// ReadHeaderTimeout mitigates slow-header attacks; IdleTimeout bounds
+		// keep-alive lifetime on idle HTTP connections.
+		srv := &http.Server{
+			Addr:              addr,
+			Handler:           mux,
+			ReadHeaderTimeout: 5 * time.Second,
+			ReadTimeout:       15 * time.Second,
+			IdleTimeout:       120 * time.Second,
+		}
 
 		// Open browser
 		if cfg.OpenBrowserOnServe {
@@ -124,7 +137,7 @@ var serveCmd = &cobra.Command{
 			srv.Shutdown(shutCtx)
 		}()
 
-		log.Printf("Dashboard: http://localhost:%d", cfg.Port)
+		log.Printf("Dashboard: http://127.0.0.1:%d", cfg.Port)
 		if err := srv.ListenAndServe(); err != http.ErrServerClosed {
 			return err
 		}
@@ -139,6 +152,10 @@ func openBrowser(url string) {
 		cmd = exec.Command("open", url)
 	case "linux":
 		cmd = exec.Command("xdg-open", url)
+	case "windows":
+		// Use rundll32 instead of `cmd /c start` to avoid quoting issues
+		// when the URL contains characters like '&'.
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
 	default:
 		return
 	}

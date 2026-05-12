@@ -1,7 +1,7 @@
 package parser
 
 import (
-	"os"
+	"io/fs"
 	"path/filepath"
 	"strings"
 )
@@ -9,11 +9,14 @@ import (
 // DiscoverFiles walks the log directory and returns all .jsonl files.
 func DiscoverFiles(logDir string) ([]string, error) {
 	var files []string
-	err := filepath.Walk(logDir, func(path string, info os.FileInfo, err error) error {
+	err := filepath.WalkDir(logDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // skip inaccessible dirs
 		}
-		if !info.IsDir() && strings.HasSuffix(path, ".jsonl") {
+		if d.IsDir() {
+			return nil
+		}
+		if d.Type().IsRegular() && strings.HasSuffix(path, ".jsonl") {
 			files = append(files, path)
 		}
 		return nil
@@ -23,20 +26,26 @@ func DiscoverFiles(logDir string) ([]string, error) {
 
 // ExtractSessionInfo derives session ID and project name from a JSONL file path.
 // Paths look like:
-//   ~/.claude/projects/-home-user-Github-project/SESSION_UUID.jsonl
-//   ~/.claude/projects/-home-user-Github-project/SESSION_UUID/subagents/agent-XXXX.jsonl
+//
+//	~/.claude/projects/-home-user-Github-project/SESSION_UUID.jsonl
+//	~/.claude/projects/-home-user-Github-project/SESSION_UUID/subagents/agent-XXXX.jsonl
 func ExtractSessionInfo(path string) SessionInfo {
 	info := SessionInfo{}
+
+	// Normalize path separators so the same logic works on Windows.
+	// We use filepath.Dir/Base on the ORIGINAL path (they handle OS separators
+	// correctly), but use the normalized form for the "/subagents/" split.
+	normalized := filepath.ToSlash(path)
 
 	dir := filepath.Dir(path)
 	base := filepath.Base(path)
 
 	// Check if this is a subagent file
-	if strings.Contains(path, "/subagents/") {
+	if strings.Contains(normalized, "/subagents/") {
 		info.IsSubagent = true
 		// Walk up to find the session directory
 		// .../SESSION_UUID/subagents/agent-xxx.jsonl
-		parts := strings.Split(path, "/subagents/")
+		parts := strings.Split(normalized, "/subagents/")
 		if len(parts) > 0 {
 			sessionDir := parts[0]
 			info.SessionID = filepath.Base(sessionDir)

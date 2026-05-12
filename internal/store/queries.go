@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"time"
 
 	"github.com/ksred/cctrack/internal/calculator"
@@ -197,15 +198,15 @@ func (s *Store) RecentSessions(n int) ([]Session, error) {
 }
 
 type ProjectSummary struct {
-	Project        string  `json:"project"`
-	SessionCount   int     `json:"session_count"`
-	TotalCost      float64 `json:"total_cost"`
-	TotalTokens    int64   `json:"total_tokens"`
-	TotalInput     int64   `json:"total_input"`
-	TotalOutput    int64   `json:"total_output"`
-	TotalCacheRead int64   `json:"total_cache_read"`
-	TotalCacheWrite int64  `json:"total_cache_write"`
-	LastActivity   string  `json:"last_activity"`
+	Project         string  `json:"project"`
+	SessionCount    int     `json:"session_count"`
+	TotalCost       float64 `json:"total_cost"`
+	TotalTokens     int64   `json:"total_tokens"`
+	TotalInput      int64   `json:"total_input"`
+	TotalOutput     int64   `json:"total_output"`
+	TotalCacheRead  int64   `json:"total_cache_read"`
+	TotalCacheWrite int64   `json:"total_cache_write"`
+	LastActivity    string  `json:"last_activity"`
 }
 
 type ProjectMonthly struct {
@@ -289,9 +290,17 @@ type CostByType struct {
 }
 
 func (s *Store) GetCostBreakdown() (*CostByType, error) {
+	// Aggregate token totals per model in SQL, then iterate the small set of
+	// models in Go to apply rates. This is one round-trip instead of one row
+	// per session.
 	rows, err := s.db.Query(`
-		SELECT model, total_input, total_output, total_cache_read, total_cache_write
-		FROM sessions`)
+		SELECT model,
+			COALESCE(SUM(total_input), 0)       AS input,
+			COALESCE(SUM(total_output), 0)      AS output,
+			COALESCE(SUM(total_cache_read), 0)  AS cache_read,
+			COALESCE(SUM(total_cache_write), 0) AS cache_write
+		FROM sessions
+		GROUP BY model`)
 	if err != nil {
 		return nil, err
 	}
@@ -314,6 +323,9 @@ func (s *Store) GetCostBreakdown() (*CostByType, error) {
 		result.OutputCost += cb.OutputCost
 		result.CacheReadCost += cb.CacheReadCost
 		result.CacheWriteCost += cb.CacheWriteCost
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return result, nil
 }
@@ -366,7 +378,7 @@ type HeatmapCell struct {
 
 func (s *Store) GetActivityHeatmap() ([]HeatmapCell, error) {
 	rows, err := s.db.Query(`
-		SELECT CAST(STRFTIME('%w', last_activity) AS INTEGER) as dow,
+		SELECT CAST(STRFTIME('%w', last_activity, 'localtime') AS INTEGER) as dow,
 			CAST(STRFTIME('%H', last_activity, 'localtime') AS INTEGER) as hour,
 			SUM(total_cost) as cost
 		FROM sessions
@@ -392,8 +404,8 @@ func (s *Store) GetActivityHeatmap() ([]HeatmapCell, error) {
 // --- Feature: Cost Velocity / Trend Comparison ---
 
 type Trends struct {
-	PrevDayCost  float64 `json:"prev_day_cost"`
-	PrevWeekCost float64 `json:"prev_week_cost"`
+	PrevDayCost   float64 `json:"prev_day_cost"`
+	PrevWeekCost  float64 `json:"prev_week_cost"`
 	PrevMonthCost float64 `json:"prev_month_cost"`
 }
 
@@ -411,22 +423,25 @@ func (s *Store) GetTrends() (*Trends, error) {
 	t := &Trends{}
 
 	// Previous day cost (yesterday)
-	s.db.QueryRow(`
+	errDay := s.db.QueryRow(`
 		SELECT COALESCE(SUM(total_cost), 0)
 		FROM sessions WHERE DATE(last_activity) >= ? AND DATE(last_activity) < ?`,
 		yesterday, todayStr).Scan(&t.PrevDayCost)
 
 	// Previous week cost (7-14 days ago)
-	s.db.QueryRow(`
+	errWeek := s.db.QueryRow(`
 		SELECT COALESCE(SUM(total_cost), 0)
 		FROM sessions WHERE last_activity >= ? AND last_activity < ?`,
 		twoWeeksAgo, oneWeekAgo).Scan(&t.PrevWeekCost)
 
 	// Previous month cost
-	s.db.QueryRow(`
+	errMonth := s.db.QueryRow(`
 		SELECT COALESCE(SUM(total_cost), 0)
 		FROM sessions WHERE last_activity >= ? AND last_activity < ?`,
 		prevMonthStart, prevMonthEnd).Scan(&t.PrevMonthCost)
 
+	if err := errors.Join(errDay, errWeek, errMonth); err != nil {
+		return nil, err
+	}
 	return t, nil
 }

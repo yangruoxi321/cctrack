@@ -2,6 +2,7 @@ package parser
 
 import (
 	"bufio"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -68,7 +69,13 @@ func (p *Parser) ParseFile(path string) ([]string, error) {
 		return nil, err
 	}
 	if offset > fi.Size() {
-		offset = 0 // file was truncated, re-parse from start
+		// File was truncated/rotated. Roll back the contributions this file
+		// previously made to the sessions table before re-parsing from the
+		// start; otherwise the additive UpsertSession would double-count.
+		if err := p.rollbackFileContributions(path); err != nil {
+			return nil, fmt.Errorf("rolling back contributions for %s: %w", path, err)
+		}
+		offset = 0
 	}
 	if offset == fi.Size() {
 		return nil, nil // nothing new
@@ -121,13 +128,13 @@ func (p *Parser) ParseFile(path string) ([]string, error) {
 
 	// Aggregate token usage per session
 	type sessionAgg struct {
-		model     string
-		slug      string
-		sessionID string
-		timestamp string
-		input     int64
-		output    int64
-		cacheRead int64
+		model      string
+		slug       string
+		sessionID  string
+		timestamp  string
+		input      int64
+		output     int64
+		cacheRead  int64
 		cacheWrite int64
 	}
 	sessions := make(map[string]*sessionAgg)
@@ -196,8 +203,13 @@ func (p *Parser) ParseFile(path string) ([]string, error) {
 		processEvent(event, "")
 	}
 
-	// Upsert each session
-	var affectedIDs []string
+	// Pre-compute session deltas (with cost) so we can write them in a single
+	// transaction below.
+	type pendingSession struct {
+		delta store.SessionDelta
+		cost  float64
+	}
+	pending := make(map[string]pendingSession, len(sessions))
 	for sid, agg := range sessions {
 		usage := calculator.TokenUsage{
 			InputTokens:      agg.input,
@@ -207,41 +219,87 @@ func (p *Parser) ParseFile(path string) ([]string, error) {
 		}
 		cost := calculator.Calculate(agg.model, usage)
 
-		project := info.Project
-		delta := store.SessionDelta{
-			ID:              sid,
-			Project:         project,
-			Slug:            agg.slug,
-			Model:           agg.model,
-			Timestamp:       agg.timestamp,
-			DeltaInput:      agg.input,
-			DeltaOutput:     agg.output,
-			DeltaCacheRead:  agg.cacheRead,
-			DeltaCacheWrite: agg.cacheWrite,
-			DeltaCost:       cost.TotalCost,
-		}
-
-		if err := p.store.UpsertSession(delta); err != nil {
-			log.Printf("Warning: failed to upsert session %s: %v", sid, err)
-			continue
-		}
-		affectedIDs = append(affectedIDs, sid)
-	}
-
-	// Upsert per-request records for timeline feature
-	for _, rec := range requestRecords {
-		if err := p.store.UpsertRequest(rec); err != nil {
-			log.Printf("Warning: failed to upsert request %s: %v", rec.RequestID, err)
+		pending[sid] = pendingSession{
+			delta: store.SessionDelta{
+				ID:              sid,
+				Project:         info.Project,
+				Slug:            agg.slug,
+				Model:           agg.model,
+				Timestamp:       agg.timestamp,
+				DeltaInput:      agg.input,
+				DeltaOutput:     agg.output,
+				DeltaCacheRead:  agg.cacheRead,
+				DeltaCacheWrite: agg.cacheWrite,
+				DeltaCost:       cost.TotalCost,
+			},
+			cost: cost.TotalCost,
 		}
 	}
 
-	// Update file offset to current position
+	// Single transaction for the entire write phase: session upserts, request
+	// upserts, per-file contribution updates, and the offset bump.
+	var affectedIDs []string
 	newOffset := fi.Size()
-	if err := p.store.SetFileOffset(path, newOffset); err != nil {
-		return affectedIDs, fmt.Errorf("updating offset: %w", err)
+	err = p.store.WithTx(func(tx *sql.Tx) error {
+		for sid, ps := range pending {
+			if err := p.store.UpsertSessionTx(tx, ps.delta); err != nil {
+				return fmt.Errorf("upsert session %s: %w", sid, err)
+			}
+			if err := p.store.AddFileContributionTx(tx, store.FileContribution{
+				FilePath:   path,
+				SessionID:  sid,
+				Input:      ps.delta.DeltaInput,
+				Output:     ps.delta.DeltaOutput,
+				CacheRead:  ps.delta.DeltaCacheRead,
+				CacheWrite: ps.delta.DeltaCacheWrite,
+				Cost:       ps.cost,
+			}); err != nil {
+				return fmt.Errorf("record contribution %s: %w", sid, err)
+			}
+			affectedIDs = append(affectedIDs, sid)
+		}
+
+		for _, rec := range requestRecords {
+			if err := p.store.UpsertRequestTx(tx, rec); err != nil {
+				return fmt.Errorf("upsert request %s: %w", rec.RequestID, err)
+			}
+		}
+
+		if err := p.store.SetFileOffsetTx(tx, path, newOffset); err != nil {
+			return fmt.Errorf("updating offset: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	return affectedIDs, nil
+}
+
+// rollbackFileContributions subtracts everything this file previously
+// contributed to the sessions table and then clears the contribution rows
+// for the file. Used when truncation/rotation is detected so a re-parse
+// from offset 0 doesn't double-count.
+func (p *Parser) rollbackFileContributions(path string) error {
+	contribs, err := p.store.GetFileContributions(path)
+	if err != nil {
+		return err
+	}
+	if len(contribs) == 0 {
+		// Nothing recorded (e.g. file was tracked before this feature shipped).
+		// Best we can do is drop any stale rows and proceed.
+		return p.store.ClearFileContributions(path)
+	}
+	return p.store.WithTx(func(tx *sql.Tx) error {
+		for _, c := range contribs {
+			if err := p.store.SubtractFromSessionTx(tx, c.SessionID,
+				c.Input, c.Output, c.CacheRead, c.CacheWrite, c.Cost); err != nil {
+				return fmt.Errorf("subtract from session %s: %w", c.SessionID, err)
+			}
+		}
+		return p.store.ClearFileContributionsTx(tx, path)
+	})
 }
 
 // ParseFiles parses a specific set of files (used by watcher for incremental updates).

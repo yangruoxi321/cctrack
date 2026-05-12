@@ -1,6 +1,7 @@
 package watcher
 
 import (
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -45,11 +46,11 @@ func New(logDir string, debounce time.Duration, cb Callback) (*Watcher, error) {
 }
 
 func (w *Watcher) addDirs(root string) error {
-	return filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
-		if info.IsDir() {
+		if d.IsDir() {
 			if err := w.watcher.Add(path); err != nil {
 				log.Printf("Warning: cannot watch %s: %v", path, err)
 			}
