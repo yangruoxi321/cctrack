@@ -1,5 +1,12 @@
 # Binary
 cctrack
+cctrack.exe
+
+# Local run state
+.run/
+
+# npm lockfile only belongs under web/
+/package-lock.json
 
 # Dependencies
 web/node_modules/
